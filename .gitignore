@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Agent-generated artifacts (scripts, cleaned data, dashboards, sqlite dbs).
+# We keep the folder but ignore its contents so each run starts fresh.
+workspace/*
+!workspace/.gitkeep
+
+# Streamlit
+.streamlit/
