@@ -22,6 +22,9 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-5")
 # A small, fast model used only by the input guardrail (a cheap relevance classifier).
 GUARDRAIL_MODEL = os.getenv("OPENAI_GUARDRAIL_MODEL", "gpt-5-mini")
 
+# Embedding model used by the RAG knowledge base.
+EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")
+
 
 # --- Filesystem boundaries --------------------------------------------------------
 # The project root is two levels up from this file: src/data_agent/config.py -> <root>.
@@ -38,8 +41,17 @@ WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 # Where conversation memory (the SQLiteSession) is stored between runs.
 MEMORY_DB = WORKSPACE_DIR / ".memory.db"
 
+# RAG: curated reference documents (read-only) and the Chroma vector DB built from them.
+KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge"
+CHROMA_DIR = WORKSPACE_DIR / "chroma"        # persistent on-disk Chroma database
+CHROMA_COLLECTION = "knowledge"
+
+# MCP: the local stdio reference server we ship with the project.
+REFERENCE_MCP_SERVER = PROJECT_ROOT / "mcp_servers" / "reference_server.py"
+
 
 def ensure_dirs() -> None:
     """Create the folders the app depends on. Safe to call repeatedly."""
     RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)

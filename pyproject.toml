@@ -5,9 +5,13 @@ description = "A teaching example: a multi-agent data-pipeline assistant on the 
 requires-python = ">=3.10"
 dependencies = [
     "openai-agents>=0.15",
+    "mcp>=1.2",
+    "chromadb>=1.0",
     "pandas>=2.2",
+    "numpy>=1.26",
     "tabulate>=0.9",
     "streamlit>=1.40",
+    "rich>=13.7",
     "python-dotenv>=1.0",
 ]
 

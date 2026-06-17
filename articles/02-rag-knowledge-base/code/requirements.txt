@@ -1,0 +1,16 @@
+# Core: the official OpenAI Agents SDK (agents, handoffs, tools, guardrails, tracing).
+openai-agents>=0.15
+
+# RAG vector database (persistent, with an OpenAI embedding function).
+chromadb>=1.0
+numpy>=1.26
+
+# Data tooling used by the agent's tools.
+pandas>=2.2
+tabulate>=0.9          # pandas.to_markdown() uses this to render tables for the LLM
+
+# Front-end the Frontend Builder agent generates.
+streamlit>=1.40
+
+# Local config / secrets.
+python-dotenv>=1.0

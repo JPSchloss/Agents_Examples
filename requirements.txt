@@ -1,12 +1,22 @@
-# Core: the official OpenAI Agents SDK (agents, handoffs, tools, guardrails, tracing).
+# Core: the official OpenAI Agents SDK (agents, handoffs, tools, guardrails, tracing, MCP).
 openai-agents>=0.15
 
-# Data tooling used by the agent's tools.
+# MCP: lets us author the local "data standards" Model Context Protocol server.
+mcp>=1.2
+
+# RAG vector database (persistent, with an OpenAI embedding function).
+chromadb>=1.0
+
+# Data tooling used by the agent's tools and the RAG vector math.
 pandas>=2.2
+numpy>=1.26
 tabulate>=0.9          # pandas.to_markdown() uses this to render tables for the LLM
 
 # Front-end the Frontend Builder agent generates.
 streamlit>=1.40
+
+# Streamlined CLI experience (markdown rendering, spinners, tables).
+rich>=13.7
 
 # Local config / secrets.
 python-dotenv>=1.0

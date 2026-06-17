@@ -1,0 +1,20 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+
+# Agent-generated artifacts (scripts, cleaned data, dashboards, sqlite dbs).
+workspace/*
+!workspace/.gitkeep
+
+# Streamlit
+.streamlit/

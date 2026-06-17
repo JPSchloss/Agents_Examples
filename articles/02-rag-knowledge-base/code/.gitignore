@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Agent-generated artifacts (scripts, cleaned data, dashboards, sqlite dbs).
+workspace/*
+!workspace/.gitkeep
+
+# Streamlit
+.streamlit/

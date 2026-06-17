@@ -3,21 +3,23 @@
 A complete, runnable teaching example: a **multi-agent data-pipeline assistant**. You talk
 to it in plain English and it can **ingest, profile, clean, and pipeline data**, **load it
 into a database**, **build a Streamlit dashboard**, and **advise you** on how to build well
-— all while you stay in the loop.
+— grounded in your own knowledge base (**RAG**) and extended with external tool servers
+(**MCP**), all while you stay in the loop.
 
 This document walks through the system from first principles. Read it top to bottom and
 you'll understand not just *what* the code does, but *why* each piece exists and how the
 modern agentic patterns fit together.
 
 > **Stack:** Python 3.10+ · [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/)
-> (`openai-agents`) · pandas · SQLite · Streamlit.
+> (`openai-agents`) · RAG ([ChromaDB](https://www.trychroma.com) + OpenAI embeddings) ·
+> [MCP](https://modelcontextprotocol.io) · pandas · SQLite · Streamlit · `rich` CLI.
 
 ---
 
 ## Table of contents
 
 1. [What is an "agent," really?](#1-what-is-an-agent-really)
-2. [The seven building blocks](#2-the-seven-building-blocks-this-example-teaches)
+2. [The building blocks](#2-the-building-blocks-this-example-teaches)
 3. [System architecture](#3-system-architecture)
 4. [Project layout](#4-project-layout)
 5. [Setup — step by step](#5-setup--step-by-step)
@@ -60,7 +62,7 @@ tracing. This example uses all of them.
 
 ---
 
-## 2. The seven building blocks this example teaches
+## 2. The building blocks this example teaches
 
 | # | Concept | What it is | Where to see it |
 |---|---------|-----------|-----------------|
@@ -71,6 +73,8 @@ tracing. This example uses all of them.
 | 5 | **Sessions** | Persistent conversation memory across turns/restarts | `app.py` |
 | 6 | **Structured output** | Forcing the model to return typed, parseable data | `schemas.py` |
 | 7 | **Tracing** | Automatic, inspectable record of every step | built-in (see §6) |
+| 8 | **RAG + vector DB** | Retrieving grounded facts from your docs via ChromaDB | `rag.py`, `tools/knowledge.py` (§7.8) |
+| 9 | **MCP** | Connecting external tool servers over a standard protocol | `mcp_servers/`, `team.py` (§7.9) |
 
 The design philosophy throughout: **keep the model in charge of decisions, keep correctness
 in ordinary code.** The model decides *when* to clean data or *what* SQL to run; the tools
@@ -93,15 +97,26 @@ are more reliable than one mega-prompt, and each specialist only gets the tools 
                             ▼         ▼              ▼
                   ┌──────────────┐ ┌──────────┐ ┌──────────┐
                   │ Data Engineer│ │ Frontend │ │ Advisor  │
-                  │              │ │ Builder  │ │          │
-                  │ profile_data │ │ writes a │ │ explains │
-                  │ write/run    │ │ Streamlit│ │ & guides │
-                  │ code, sqlite │ │ app      │ │ (no      │
-                  │              │ │          │ │  tools)  │
+                  │ profile/clean│ │ Builder  │ │ explains │
+                  │ run code,    │ │ writes a │ │ & guides │
+                  │ sqlite       │ │ Streamlit│ │          │
+                  │ + RAG + MCP  │ │ app      │ │ +RAG +MCP│
                   └──────┬───────┘ └────┬─────┘ └────┬─────┘
                          └──────────────┴────────────┘
                             each can hand BACK to Triage
+                         │                          │
+              ┌──────────▼───────────┐   ┌──────────▼───────────────┐
+              │ RAG · ChromaDB       │   │ MCP server               │
+              │ search_knowledge →   │   │ acme-data-standards →     │
+              │ knowledge/*.md       │   │ canonical_column_name, …  │
+              └──────────────────────┘   └──────────────────────────┘
 ```
+
+Two capability sources augment the agents' native tools:
+- **RAG** grounds answers in *your* documents (`knowledge/*.md`), retrieved from a
+  **ChromaDB** vector store via a `search_knowledge` tool — see §7.8.
+- **MCP** connects external tool servers over a standard protocol; here a local
+  "data-standards" server adds naming/typing helpers — see §7.9.
 
 - **Triage** reads your request and hands off to exactly one specialist. It carries the
   input guardrail (so the cheap relevance check happens once, at the front door).
@@ -128,18 +143,25 @@ conversation.
 ├── data/
 │   └── raw/
 │       └── sales_2024.csv   ← deliberately MESSY sample data
+├── knowledge/               ← RAG source docs (the agents' grounded "additional context")
+│   ├── company_data_dictionary.md
+│   └── data_engineering_principles.md
+├── mcp_servers/
+│   └── reference_server.py  ← a local MCP server ("acme-data-standards")
 ├── workspace/               ← the agent's sandbox (all writes land here; git-ignored)
 └── src/data_agent/
-    ├── config.py            ← models + the folders the agent may touch
+    ├── config.py            ← models, embeddings + the folders the agent may touch
     ├── context.py           ← typed run context passed to every tool
     ├── schemas.py           ← Pydantic models for structured output
     ├── guardrails.py        ← the input relevance guardrail
-    ├── team.py              ← the agents + handoffs (the heart of the system)
-    ├── app.py               ← the interactive CLI (the agent loop runner)
+    ├── rag.py               ← the RAG engine (chunk → ChromaDB embed/store/search)
+    ├── team.py              ← build_team(): the agents + handoffs + RAG + MCP wiring
+    ├── app.py               ← the CLI: argparse subcommands + rich REPL
     └── tools/
         ├── _paths.py        ← path-safety helper (sandbox enforcement)
         ├── filesystem.py    ← list / read / write files, run a script
-        └── data.py          ← profile a CSV, load to SQLite, run SQL
+        ├── data.py          ← profile a CSV, load to SQLite, run SQL
+        └── knowledge.py     ← search_knowledge: the RAG retrieval tool
 ```
 
 The **`data/raw/sales_2024.csv`** is intentionally broken so the cleaning step has real
@@ -165,8 +187,8 @@ pip install -e .
 # (or: pip install -r requirements.txt)
 ```
 
-This installs the OpenAI Agents SDK, pandas, Streamlit, and friends, and registers a
-`data-agent` command.
+This installs the OpenAI Agents SDK, the MCP SDK, ChromaDB, pandas/numpy, Streamlit,
+`rich`, and friends, and registers a `data-agent` command.
 
 ### Step 3 — Add your API key
 
@@ -179,27 +201,53 @@ cp .env.example .env
 
 **Model choice.** The default is `gpt-5`. If your account doesn't have access yet, set
 `OPENAI_MODEL=gpt-4.1` in `.env`. The cheap guardrail uses `OPENAI_GUARDRAIL_MODEL`
-(`gpt-5-mini` by default; `gpt-4.1-mini` is a fine fallback).
+(`gpt-5-mini` by default; `gpt-4.1-mini` is a fine fallback). RAG uses
+`OPENAI_EMBED_MODEL` (`text-embedding-3-small` by default).
+
+### Step 4 — Build the knowledge base (RAG index)
+
+```bash
+data-agent ingest
+```
+
+This chunks and embeds the markdown files in `knowledge/` into a **ChromaDB** vector
+collection (persisted at `workspace/chroma/`) so the agents can retrieve grounded facts.
+Re-run it (with `--force`) whenever you edit those docs.
+You can verify everything is wired up with:
+
+```bash
+data-agent info        # shows models, RAG index status, MCP server status
+```
 
 ---
 
 ## 6. Run it
 
+The CLI has three subcommands; `chat` is the default. Every command supports `-h`:
+
 ```bash
-python -m data_agent.app      # or just: data-agent
+data-agent -h                 # top-level help (lists subcommands)
+data-agent chat -h            # all chat flags
+data-agent ingest             # build/refresh the RAG index
+data-agent info               # config + component status
+data-agent                    # start chatting (chat is the default)
 ```
 
-You'll get a REPL. Here's a productive first session — try these in order:
+Useful `chat` flags: `--model gpt-4.1`, `--reset` (fresh conversation), `--max-turns N`
+(cost guard), `--no-mcp` / `--no-rag` (toggle those capabilities), `--no-trace`.
+
+Inside the REPL (a `rich` UI that renders markdown and reports token usage per turn), try
+this productive first session in order:
 
 ```
-you ▸ What data do I have to work with?
-you ▸ Profile data/raw/sales_2024.csv and tell me what's wrong with it.
-you ▸ Clean it, then load it into SQLite as a table called sales.
-you ▸ Build me a dashboard for the cleaned sales data.
-you ▸ How should I think about making this pipeline idempotent?   (← pure advice)
+user ▸ What data do I have to work with?
+user ▸ Profile data/raw/sales_2024.csv and tell me what's wrong with it.
+user ▸ Clean it, then load it into SQLite as a table called sales.
+user ▸ Build me a dashboard for the cleaned sales data.
+user ▸ How should I handle the negative-quantity rows?   (← grounded advice via RAG)
 ```
 
-REPL commands: `/artifacts` (list what the agents created), `/reset` (clear memory),
+REPL commands: `/help`, `/artifacts` (files the agents created), `/reset` (clear memory),
 `/exit`.
 
 After the dashboard step, launch the generated front end in a second terminal:
@@ -225,10 +273,11 @@ This section goes file by file in the order that builds understanding.
 
 ### 7.1 `config.py` — models and boundaries
 
-Two responsibilities: pick the models (from env vars, so the same code runs anywhere) and
-define **the only folders the agent may touch** — a read-only `data/raw` and a writable
-`workspace/`. Confining all writes to one sandbox folder is the foundation that makes it
-safe to hand a model file-writing and code-execution tools.
+Two responsibilities: pick the models — reasoning, guardrail, and embedding, all from env
+vars so the same code runs anywhere — and define **the only folders the agent may touch**: a
+read-only `data/raw` and `knowledge/`, plus a writable `workspace/`. Confining all writes to
+one sandbox folder is the foundation that makes it safe to hand a model file-writing and
+code-execution tools.
 
 ### 7.2 `context.py` — the run context
 
@@ -321,7 +370,13 @@ reduce the blast radius of attempts to repurpose your powerful agent.
 
 ### 7.6 `team.py` — the agents and how they connect
 
-Each agent is `Agent(name, instructions, model, tools=[...], handoffs=[...])`.
+`team.py` exposes a **factory**, `build_team(mcp_servers=None, with_knowledge=True)`, rather
+than module-level agents. Why? MCP servers are *live connections* that must be opened
+(async) before a run and closed after — they can't exist at import time. The app opens its
+MCP servers, then calls `build_team(...)` to construct agents around them. (It's also handy
+for tests: `build_team(with_knowledge=False)` gives you a no-RAG, no-MCP team in one line.)
+
+Each agent is `Agent(name, instructions, model, tools=[...], handoffs=[...], mcp_servers=[...])`.
 
 - **Instructions** are wrapped with `prompt_with_handoff_instructions(...)`, an SDK helper
   that appends the boilerplate the model needs to use handoffs correctly.
@@ -354,31 +409,139 @@ Each agent is `Agent(name, instructions, model, tools=[...], handoffs=[...])`.
   exists* always go to the Data Engineer — plus "always hand off; do not answer yourself."
 
 Notice **least privilege for tools**: only the Data Engineer gets `run_python_file`; the
-Advisor gets no tools at all. The Data Engineer's instructions encode a real *workflow*
-(profile → write script → run → fix-on-error → load → validate), which is what turns a pile
+Frontend Builder gets no MCP/RAG; the Advisor gets *only* the read-only `search_knowledge`
+tool. The Data Engineer and Advisor receive `search_knowledge` (RAG) and the
+`mcp_servers` list (MCP) because both benefit from grounded facts and the data-standards
+helpers. The Data Engineer's instructions encode a real *workflow* (consult knowledge →
+profile → write script → run → fix-on-error → load → validate), which is what turns a pile
 of tools into reliable, step-wise behavior.
 
-### 7.7 `app.py` — running the loop
+### 7.7 `app.py` — the CLI and the loop
 
-The CLI is thin on purpose; the SDK does the heavy lifting:
+`app.py` is two things: an **`argparse` CLI** (subcommands `chat`/`ingest`/`info`, all with
+`-h`) and a **`rich` REPL**. The agentic core is still tiny — the SDK does the heavy lifting:
 
 ```python
-session = SQLiteSession("cli-session", str(config.MEMORY_DB))   # persistent memory
-context = PipelineContext()                                     # tool dependency injection
+async with AsyncExitStack() as stack:                # manage MCP server lifecycles
+    server = MCPServerStdio(params={"command": sys.executable,
+                                    "args": [str(config.REFERENCE_MCP_SERVER)]},
+                            name="acme-data-standards", cache_tools_list=True)
+    await stack.enter_async_context(server)          # connect; auto-cleanup on exit
+    triage = build_team(mcp_servers=[server], with_knowledge=True)
 
-result = await Runner.run(triage_agent, user, context=context, session=session)
-print(result.final_output)
+    session = SQLiteSession(args.session, str(config.MEMORY_DB))   # persistent memory
+    result = await Runner.run(triage, user, context=context,
+                              session=session, max_turns=args.max_turns)
 ```
 
-- **`Runner.run`** executes the entire agent loop — model calls, tool calls, and handoffs —
-  until a final answer is produced, then returns a result object.
+- **`Runner.run`** executes the entire agent loop — model calls, tool calls, MCP calls, and
+  handoffs — until a final answer is produced, then returns a result object. `max_turns`
+  caps loop steps as a cost/runaway guard.
+- **`MCPServerStdio` + `AsyncExitStack`** launch the MCP server as a subprocess for the
+  session and guarantee it's cleaned up on exit. See §7.9.
 - **`SQLiteSession`** persists the conversation to a SQLite file. Same session id ⇒ the same
-  thread, even across restarts. This is why follow-ups like *"now build a dashboard"* work:
-  the model still sees everything that happened, including which specialist last had the
-  floor. `/reset` calls `session.clear_session()`.
+  thread, even across restarts. This is why follow-ups like *"now build a dashboard"* work.
+  `--reset` / `/reset` calls `session.clear_session()`.
 - We always **start at triage** every turn; the session carries the state forward.
+- After each turn we print **token usage** from `result.context_wrapper.usage` so cost is
+  visible while you teach.
 - We catch `InputGuardrailTripwireTriggered` for a friendly off-topic message, and catch
   generic exceptions so a transient API/tool error doesn't kill the REPL.
+
+The `--model` flag mutates `config.MODEL` *before* `build_team()` runs (the factory reads it
+at call time), so you can swap models without editing `.env`.
+
+### 7.8 `rag.py` + `tools/knowledge.py` — grounded knowledge (RAG)
+
+**RAG (Retrieval-Augmented Generation)** means: instead of hoping the model memorized your
+facts, you *retrieve* the most relevant passages from your own documents at query time and
+hand them to the model. Answers stay grounded in *your* truth, and you update knowledge by
+editing files — no retraining. Storage and search are handled by **ChromaDB**, a persistent
+vector database. The flow, all visible in `rag.py`:
+
+```
+knowledge/*.md ─chunk─▶ text chunks ──┐
+                                       ├─▶ Chroma collection  (embeds + stores + HNSW index)
+query ─────────────────────────────────┘                 │   persisted at workspace/chroma/
+                                                           ▼
+                          Chroma ANN search ──▶ top-k chunks (source + similarity score)
+```
+
+- **`build_index()`** (run via `data-agent ingest`) splits each markdown doc into overlapping
+  ~900-char chunks and adds them to a Chroma collection. Chroma embeds each chunk via an
+  attached **`OpenAIEmbeddingFunction`** (`text-embedding-3-small`) and persists the vectors
+  to disk. Re-ingesting drops and rebuilds the collection, so it's idempotent.
+- **`search(query, k=4)`** hands the query to `collection.query(...)`; Chroma embeds it,
+  runs an approximate-nearest-neighbour search over its HNSW index, and returns the top
+  passages with their source and a cosine similarity score.
+- **`tools/knowledge.py`** wraps that in the `search_knowledge` `@function_tool`. The agents
+  call it *on demand* — pulling only relevant passages — which is cheaper and scales to far
+  more knowledge than fits in a prompt. If the collection is empty, the tool returns a
+  friendly "run `data-agent ingest`" message instead of erroring.
+
+Why Chroma rather than a JSON file + hand-rolled cosine? A purpose-built vector DB gives you
+persistent on-disk storage, an ANN index that scales past brute-force search, embedding
+management, and metadata filtering — all behind the same `search(query) → top-k` interface
+the agents see. **The storage engine got more capable; the agent-facing contract didn't
+change** — which is exactly how you want infrastructure swaps to feel.
+
+The knowledge base here is the **company data dictionary** (canonical region/category values,
+the `total = quantity × unit_price` rule, how to treat returns) and the **house engineering
+principles**. So when you ask *"how should I handle negative-quantity rows?"*, the Advisor
+retrieves the actual rule ("returns → exclude from revenue") and cites the source, rather
+than inventing a generic answer.
+
+> **Reliability lesson — force the retrieval.** A strong model will often *think* it already
+> knows the answer and skip the tool, then confidently cite a file that doesn't exist. Prompt
+> instructions ("you MUST search first") help but aren't reliable on their own. The robust
+> fix is `model_settings=ModelSettings(tool_choice="required")` on the Advisor: the SDK makes
+> the model call a tool on its first step (so it actually retrieves), then auto-resets
+> `tool_choice` to `"auto"` (because `reset_tool_choice` defaults to `True`) so the next turn
+> produces the final grounded answer without looping. *Don't trust the model to ground itself
+> — make grounding structurally unavoidable.*
+
+> **Scaling note:** Chroma runs embedded (in-process, on-disk) here, which is perfect for
+> teaching and small/medium corpora. The same Chroma code talks to a **client/server**
+> deployment by switching `PersistentClient` for `HttpClient`. To go further, swap in
+> pgvector/Pinecone or OpenAI's hosted vector stores + the SDK's built-in `FileSearchTool`
+> — the retrieval *interface* (query → top-k chunks) stays identical.
+
+### 7.9 `mcp_servers/reference_server.py` — an MCP server
+
+**MCP (Model Context Protocol)** is an open standard that lets an AI app connect to external
+**tool/data servers** over one common interface, instead of hard-coding each integration —
+"USB-C for tools." Write a capability once as an MCP server and *any* MCP-aware client (this
+app, Claude Desktop, IDEs, …) can use it. The Agents SDK is an MCP **client**: attach a
+server via `mcp_servers=[...]` and its tools appear to the model alongside the native ones.
+
+Our server (`reference_server.py`) is built with `FastMCP` and speaks **stdio** (the client
+launches it as a subprocess and talks over stdin/stdout). It exposes three deterministic
+*data-standards* helpers — `canonical_column_name`, `standard_dtype`, `naming_conventions`:
+
+```python
+mcp = FastMCP("acme-data-standards")
+
+@mcp.tool()
+def canonical_column_name(name: str) -> str:
+    """Convert a column name to the org's canonical snake_case form."""
+    ...
+
+if __name__ == "__main__":
+    mcp.run()          # stdio transport — exactly what MCPServerStdio expects
+```
+
+This is deliberately *distinct from RAG*: RAG returns prose passages to reason over; MCP
+returns exact, machine-checked answers. The Data Engineer uses both — knowledge for the
+*rules*, the MCP server for precise *naming/typing*.
+
+**Swapping in third-party servers** is the real-world payoff. Point `MCPServerStdio` (or
+`MCPServerStreamableHttp`) at any published server — for example the filesystem, fetch, or
+GitHub servers — and those tools become available to your agents with no code changes:
+
+```python
+fs = MCPServerStdio(params={"command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]})
+```
 
 ---
 
@@ -391,6 +554,10 @@ Trace of: **"Clean data/raw/sales_2024.csv and load it as a table called sales."
 2. **Triage** sees a data task and emits a **handoff** to *Data Engineer*. (In the trace
    this is a `transfer_to_data_engineer` tool call.)
 3. **Data Engineer** follows its workflow:
+   - `search_knowledge("region/category canonical values, returns, total rule")` → retrieves
+     the data-dictionary rules (RAG), and the MCP `standard_dtype`/`canonical_column_name`
+     tools confirm naming and typing. The agent now cleans to *your* standards, not generic
+     defaults.
    - `list_datasets()` → sees `raw/sales_2024.csv` and its absolute path.
    - `profile_dataset("raw/sales_2024.csv")` → a typed `DataProfile`: 33 rows, 1 duplicate,
      `order_date` uses 5 formats, `unit_price` has currency symbols, missing values in
@@ -472,7 +639,13 @@ learn and teach with.
    at 50 rows — so a chatty tool can't flood the context window.
 
 Two things cost **nothing**: running the generated Streamlit dashboard (it's just code — no
-LLM at runtime) and the deterministic tools themselves (pandas/SQLite).
+LLM at runtime) and the deterministic tools themselves (pandas/SQLite **and the MCP
+data-standards calls** — no model involved).
+
+**RAG cost** is tiny and twofold: a one-time embedding pass at `ingest` (a few thousand
+tokens on the cheap `text-embedding-3-small` model — fractions of a cent for this corpus),
+plus one small query-embedding per `search_knowledge` call. The retrieved passages do add
+input tokens to that turn, but far fewer than stuffing all docs into every prompt would.
 
 ### Measure, don't guess
 
@@ -490,8 +663,14 @@ The architecture is meant to grow. Common next steps:
 
 - **Add a tool.** Write a function, decorate it with `@function_tool`, add it to the right
   agent's `tools=[...]`. Example: a `fetch_url` ingestion tool, or `export_to_parquet`.
+- **Add knowledge (RAG).** Drop a new `.md` file in `knowledge/` and re-run `data-agent
+  ingest`. No code change — the agents can now retrieve it. This is the easiest way to
+  teach the system new business rules or conventions.
+- **Add an MCP server.** Point another `MCPServerStdio`/`MCPServerStreamableHttp` at a
+  published server (filesystem, fetch, GitHub, a database server, …) and pass it into
+  `build_team(mcp_servers=[...])`. Its tools appear to the agents automatically.
 - **Add an agent.** Define a new `Agent` with a tight instruction set and a
-  `handoff_description`, then add it to `triage_agent.handoffs` (and append triage back).
+  `handoff_description`, then add it to the triage `handoffs` (and append triage back).
   Example: a *Data Validator* agent that runs Great Expectations-style checks.
 - **Add an output guardrail.** Mirror the input guardrail with `@output_guardrail` to, say,
   block a response that leaked PII or raw secrets.
@@ -535,10 +714,13 @@ This is a teaching example. Before anything real, address:
 | `OPENAI_API_KEY is not set` | `cp .env.example .env` and add your key. |
 | `model ... does not exist` / 404 | Set `OPENAI_MODEL=gpt-4.1` (and `OPENAI_GUARDRAIL_MODEL=gpt-4.1-mini`) in `.env`. |
 | `ModuleNotFoundError: data_agent` | Activate the venv and `pip install -e .`. |
+| Agent says "knowledge base not indexed" | Run `data-agent ingest` (re-run with `--force` after editing `knowledge/`). |
+| MCP tools missing / server won't start | Run `data-agent info` to check status; ensure deps are installed; try `--no-mcp` to isolate. |
 | Dashboard won't open | Run `streamlit run workspace/dashboard.py`; ensure the data was cleaned + loaded first. |
 | Agent says it can't find a file | Use `list_datasets` first; raw inputs are addressed as `raw/<name>`. |
-| Want to start fresh | `/reset` in the REPL, and delete `workspace/` contents. |
+| Want to start fresh | `data-agent chat --reset` (or `/reset` in the REPL), and delete `workspace/` contents. |
 | Off-topic request gets refused | That's the guardrail working. Ask a data/pipeline/dashboard question. |
+| See it all step by step | `data-agent info` for status; the [Traces dashboard](https://platform.openai.com/traces) for per-call detail. |
 
 ---
 
@@ -549,6 +731,8 @@ This is a teaching example. Before anything real, address:
 - **Decisions belong to the model; correctness belongs to code.** Keep deterministic work
   in plain tools.
 - **Compose small, focused agents** with handoffs instead of one mega-prompt.
+- **Ground the model in your own truth** with RAG, and **extend its reach** with MCP servers
+  — both plug in without changing the agent loop.
 - **Guardrails, sandboxing, sessions, structured output, and tracing** are what move a demo
   toward something robust.
 

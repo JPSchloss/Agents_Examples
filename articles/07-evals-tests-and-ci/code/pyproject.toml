@@ -1,0 +1,50 @@
+[project]
+name = "data-agent"
+version = "0.1.0"
+description = "A teaching example: a multi-agent data-pipeline assistant on the OpenAI Agents SDK (Article 7: Evals, Tests & CI)."
+requires-python = ">=3.10"
+dependencies = [
+    "openai-agents>=0.15",
+    "mcp>=1.2",
+    "chromadb>=1.0",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "tabulate>=0.9",
+    "streamlit>=1.40",
+    "rich>=13.7",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# Install with: pip install -e ".[dev]"
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+# After `pip install -e .` you can launch the REPL with just `data-agent`.
+data-agent = "data_agent.app:run"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# Only the deterministic unit tests run by default (no API key needed). The eval suite is
+# a separate runnable (`python -m evals.run`), not collected here.
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]   # pyflakes, pycodestyle, isort, pyupgrade, bugbear
