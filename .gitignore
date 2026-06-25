@@ -15,3 +15,13 @@ workspace/*
 
 # Streamlit
 .streamlit/
+
+# Article authoring artifacts — prose + cover images are kept local (e.g. published to
+# Medium), not version-controlled. The runnable code/ snapshots stay tracked.
+articles/00-index.md
+articles/*/article.md
+articles/*/cover.png
+articles/*/cover.svg
+
+# Root landing page — revisit later (leading slash = root only, not code/ READMEs)
+/README.md
