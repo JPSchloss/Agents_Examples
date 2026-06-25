@@ -23,5 +23,5 @@ articles/*/article.md
 articles/*/cover.png
 articles/*/cover.svg
 
-# Root landing page — revisit later (leading slash = root only, not code/ READMEs)
-/README.md
+# READMEs — revisit later (unanchored: every README.md at any level, incl. code/ snapshots)
+README.md
